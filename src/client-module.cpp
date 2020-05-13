@@ -33,6 +33,8 @@
 #include <ndn-cxx/security/transform/base64-encode.hpp>
 #include <ndn-cxx/security/transform/buffer-source.hpp>
 #include <ndn-cxx/security/transform/stream-sink.hpp>
+#include <chrono>
+#include <iostream>
 
 namespace ndn {
 namespace ndncert {
@@ -206,17 +208,27 @@ ClientModule::generateNewInterest(const time::system_clock::TimePoint& notBefore
   );
 
   // sign the Interest packet
+  auto begin = std::chrono::steady_clock::now();
   m_keyChain.sign(*interest, signingByKey(m_key.getName()));
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "Client Signing Interest: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   return interest;
 }
 
 std::list<std::string>
 ClientModule::onNewResponse(const Data& reply)
 {
+  auto begin = std::chrono::steady_clock::now();
   if (!security::verifySignature(reply, m_ca.m_anchor)) {
     _LOG_ERROR("Cannot verify data signature from " << m_ca.m_caPrefix.toUri());
     return std::list<std::string>();
   }
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "Client Data Verification: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   auto contentTLV = reply.getContent();
   contentTLV.parse();
 
@@ -259,17 +271,27 @@ ClientModule::generateChallengeInterest(const Block& challengeRequest)
                                              challengeRequest.value(), challengeRequest.value_size(), (const uint8_t*)"test", strlen("test"));
   interest->setApplicationParameters(paramBlock);
 
+  auto begin = std::chrono::steady_clock::now();
   m_keyChain.sign(*interest, signingByKey(m_key.getName()));
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "Client Signing Interest: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   return interest;
 }
 
 void
 ClientModule::onChallengeResponse(const Data& reply)
 {
+  auto begin = std::chrono::steady_clock::now();  
   if (!security::verifySignature(reply, m_ca.m_anchor)) {
     _LOG_ERROR("Cannot verify data signature from " << m_ca.m_caPrefix.toUri());
     return;
   }
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "Client Data Verification: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   auto result = decodeBlockWithAesGcm128(reply.getContent(), m_aesKey, (const uint8_t*)"test", strlen("test"));
 
   Block contentTLV = makeBinaryBlock(tlv_encrypted_payload, result.data(), result.size());

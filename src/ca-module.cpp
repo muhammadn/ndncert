@@ -19,18 +19,22 @@
  */
 
 #include "ca-module.hpp"
-#include "challenge-module.hpp"
-#include "logging.hpp"
-#include "crypto-support/enc-tlv.hpp"
-#include "protocol-detail/info.hpp"
-#include "protocol-detail/probe.hpp"
-#include "protocol-detail/new.hpp"
-#include "protocol-detail/challenge.hpp"
-#include <ndn-cxx/util/io.hpp>
-#include <ndn-cxx/security/verification-helpers.hpp>
-#include <ndn-cxx/security/signing-helpers.hpp>
-#include <ndn-cxx/util/random.hpp>
+
+#include <chrono>
+#include <iostream>
 #include <ndn-cxx/metadata-object.hpp>
+#include <ndn-cxx/security/signing-helpers.hpp>
+#include <ndn-cxx/security/verification-helpers.hpp>
+#include <ndn-cxx/util/io.hpp>
+#include <ndn-cxx/util/random.hpp>
+
+#include "challenge-module.hpp"
+#include "crypto-support/enc-tlv.hpp"
+#include "logging.hpp"
+#include "protocol-detail/challenge.hpp"
+#include "protocol-detail/info.hpp"
+#include "protocol-detail/new.hpp"
+#include "protocol-detail/probe.hpp"
 
 namespace ndn {
 namespace ndncert {
@@ -43,8 +47,8 @@ _LOG_INIT(ndncert.ca);
 
 CaModule::CaModule(Face& face, security::v2::KeyChain& keyChain,
                    const std::string& configPath, const std::string& storageType)
-  : m_face(face)
-  , m_keyChain(keyChain)
+    : m_face(face),
+      m_keyChain(keyChain)
 {
   // load the config and create storage
   m_config.load(configPath);
@@ -78,31 +82,32 @@ CaModule::registerPrefix()
   Name prefix = m_config.m_caPrefix;
   prefix.append("CA");
 
-  prefixId = m_face.registerPrefix(prefix,
-    [&] (const Name& name) {
-      // register INFO prefix
-      auto filterId = m_face.setInterestFilter(Name(name).append("INFO"),
-                                          bind(&CaModule::onInfo, this, _2));
-      m_interestFilterHandles.push_back(filterId);
+  prefixId = m_face.registerPrefix(
+      prefix,
+      [&](const Name& name) {
+        // register INFO prefix
+        auto filterId = m_face.setInterestFilter(Name(name).append("INFO"),
+                                                 bind(&CaModule::onInfo, this, _2));
+        m_interestFilterHandles.push_back(filterId);
 
-      // register PROBE prefix
-      filterId = m_face.setInterestFilter(Name(name).append("PROBE"),
-                                          bind(&CaModule::onProbe, this, _2));
-      m_interestFilterHandles.push_back(filterId);
+        // register PROBE prefix
+        filterId = m_face.setInterestFilter(Name(name).append("PROBE"),
+                                            bind(&CaModule::onProbe, this, _2));
+        m_interestFilterHandles.push_back(filterId);
 
-      // register NEW prefix
-      filterId = m_face.setInterestFilter(Name(name).append("NEW"),
-                                          bind(&CaModule::onNew, this, _2));
-      m_interestFilterHandles.push_back(filterId);
+        // register NEW prefix
+        filterId = m_face.setInterestFilter(Name(name).append("NEW"),
+                                            bind(&CaModule::onNew, this, _2));
+        m_interestFilterHandles.push_back(filterId);
 
-      // register SELECT prefix
-      filterId = m_face.setInterestFilter(Name(name).append("CHALLENGE"),
-                                          bind(&CaModule::onChallenge, this, _2));
-      m_interestFilterHandles.push_back(filterId);
+        // register SELECT prefix
+        filterId = m_face.setInterestFilter(Name(name).append("CHALLENGE"),
+                                            bind(&CaModule::onChallenge, this, _2));
+        m_interestFilterHandles.push_back(filterId);
 
-      _LOG_TRACE("Prefix " << name << " got registered");
-    },
-    bind(&CaModule::onRegisterFailed, this, _2));
+        _LOG_TRACE("Prefix " << name << " got registered");
+      },
+      bind(&CaModule::onRegisterFailed, this, _2));
   m_registeredPrefixHandles.push_back(prefixId);
 }
 
@@ -156,7 +161,16 @@ CaModule::generateCaConfigData()
   Data infoData(infoPacketName);
   infoData.setContent(contentTLV);
   infoData.setFreshnessPeriod(DEFAULT_DATA_FRESHNESS_PERIOD);
+
+  auto begin = std::chrono::steady_clock::now();
+
   m_keyChain.sign(infoData, signingByIdentity(m_config.m_caPrefix));
+
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "CA Signing Data: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
+
   return make_shared<Data>(infoData);
 }
 
@@ -213,6 +227,7 @@ CaModule::onProbe(const Interest& request)
   result.setName(request.getName());
   result.setContent(contentTLV);
   result.setFreshnessPeriod(DEFAULT_DATA_FRESHNESS_PERIOD);
+
   m_keyChain.sign(result, signingByIdentity(m_config.m_caPrefix));
   m_face.put(result);
   _LOG_TRACE("Handle PROBE: send out the PROBE response");
@@ -241,7 +256,12 @@ CaModule::onNew(const Interest& request)
   // get server's ECDH pub key
   auto myEcdhPubKeyBase64 = m_ecdh.getBase64PubKey();
   try {
+    auto begin = std::chrono::steady_clock::now();
     m_ecdh.deriveSecret(peerKeyBase64);
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "CA ECDH: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+              << "[µs]" << std::endl;
   }
   catch (const std::exception& e) {
     _LOG_ERROR("Cannot derive a shared secret using the provided ECDH key: " << e.what());
@@ -250,8 +270,15 @@ CaModule::onNew(const Interest& request)
   // generate salt for HKDF
   auto saltInt = random::generateSecureWord64();
   // hkdf
+  auto begin = std::chrono::steady_clock::now();
+
   hkdf(m_ecdh.context->sharedSecret, m_ecdh.context->sharedSecretLen,
        (uint8_t*)&saltInt, sizeof(saltInt), m_aesKey, sizeof(m_aesKey));
+
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "CA HKDF: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
 
   // parse certificate request
   Block cert_req = parameterTLV.get(tlv_cert_request);
@@ -281,8 +308,8 @@ CaModule::onNew(const Interest& request)
   }
 
   // verify the self-signed certificate, the request, and the token
-  if (!m_config.m_caPrefix.isPrefixOf(clientCert->getName()) // under ca prefix
-      || !security::v2::Certificate::isValidName(clientCert->getName()) // is valid cert name
+  if (!m_config.m_caPrefix.isPrefixOf(clientCert->getName())             // under ca prefix
+      || !security::v2::Certificate::isValidName(clientCert->getName())  // is valid cert name
       || clientCert->getName().size() != m_config.m_caPrefix.size() + IS_SUBNAME_MIN_OFFSET) {
     _LOG_ERROR("Invalid self-signed certificate name " << clientCert->getName());
     return;
@@ -291,10 +318,15 @@ CaModule::onNew(const Interest& request)
     _LOG_ERROR("Cert request with bad signature.");
     return;
   }
+  begin = std::chrono::steady_clock::now();
   if (!security::verifySignature(request, *clientCert)) {
     _LOG_ERROR("Interest with bad signature.");
     return;
   }
+  end = std::chrono::steady_clock::now();
+  std::cout << "CA Interest Verification: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
 
   // create new request instance
   std::string requestId = std::to_string(random::generateWord64());
@@ -312,10 +344,16 @@ CaModule::onNew(const Interest& request)
   result.setName(request.getName());
   result.setFreshnessPeriod(DEFAULT_DATA_FRESHNESS_PERIOD);
   result.setContent(NEW::encodeDataContent(myEcdhPubKeyBase64,
-                                      std::to_string(saltInt),
-                                      certRequest,
-                                      m_config.m_supportedChallenges));
+                                           std::to_string(saltInt),
+                                           certRequest,
+                                           m_config.m_supportedChallenges));
+
+  begin = std::chrono::steady_clock::now();
   m_keyChain.sign(result, signingByIdentity(m_config.m_caPrefix));
+  end = std::chrono::steady_clock::now();
+  std::cout << "CA Signing Data: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   m_face.put(result);
 
   if (m_config.m_statusUpdateCallback) {
@@ -334,15 +372,25 @@ CaModule::onChallenge(const Interest& request)
     return;
   }
   // verify signature
+  auto begin = std::chrono::steady_clock::now();
   if (!security::verifySignature(request, certRequest.m_cert)) {
     _LOG_ERROR("Challenge Interest with bad signature.");
     return;
   }
+  auto end = std::chrono::steady_clock::now();
+  std::cout << "CA Interest Verification: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   // decrypt the parameters
   Buffer paramTLVPayload;
   try {
+    auto begin = std::chrono::steady_clock::now();
     paramTLVPayload = decodeBlockWithAesGcm128(request.getApplicationParameters(), m_aesKey,
-                                                (uint8_t*)"test", strlen("test"));
+                                               (uint8_t*)"test", strlen("test"));
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "CA AES Decryption: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+              << "[µs]" << std::endl;
   }
   catch (const std::exception& e) {
     _LOG_ERROR("Cannot successfully decrypt the Interest parameters: " << e.what());
@@ -422,10 +470,20 @@ CaModule::onChallenge(const Interest& request)
   result.setFreshnessPeriod(DEFAULT_DATA_FRESHNESS_PERIOD);
 
   // encrypt the content
+  begin = std::chrono::steady_clock::now();
   auto contentBlock = encodeBlockWithAesGcm128(tlv::Content, m_aesKey, payload.value(),
                                                payload.value_size(), (uint8_t*)"test", strlen("test"));
+  end = std::chrono::steady_clock::now();
+  std::cout << "CA AES Encryption: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   result.setContent(contentBlock);
+  begin = std::chrono::steady_clock::now();
   m_keyChain.sign(result, signingByIdentity(m_config.m_caPrefix));
+  end = std::chrono::steady_clock::now();
+  std::cout << "CA Signing Data: "
+            << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+            << "[µs]" << std::endl;
   m_face.put(result);
 
   if (m_config.m_statusUpdateCallback) {
@@ -437,7 +495,7 @@ security::v2::Certificate
 CaModule::issueCertificate(const CertificateRequest& certRequest)
 {
   auto expectedPeriod =
-    certRequest.m_cert.getValidityPeriod().getPeriod();
+      certRequest.m_cert.getValidityPeriod().getPeriod();
   security::ValidityPeriod period(expectedPeriod.first, expectedPeriod.second);
   security::v2::Certificate newCert;
 
@@ -625,5 +683,5 @@ CaModule::jsonFromBlock(const Block& block)
   }
 }
 
-} // namespace ndncert
-} // namespace ndn
+}  // namespace ndncert
+}  // namespace ndn
