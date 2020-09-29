@@ -29,10 +29,15 @@
 #include <ndn-cxx/face.hpp>
 #include <ndn-cxx/security/key-chain.hpp>
 
+//#ifdef DLEDGER_NDNCERT
+#include "ndncert-dledger-util.hpp"
+//#endif
+
 namespace ndn {
 namespace ndncert {
 
-Face face;
+boost::asio::io_service ioService;
+Face face(ioService);
 security::KeyChain keyChain;
 std::string repoHost = "localhost";
 std::string repoPort = "7376";
@@ -82,6 +87,9 @@ main(int argc, char* argv[])
   std::string configFilePath(SYSCONFDIR "/ndncert/ca.conf");
   bool wantRepoOut = false;
 
+  //dledger options
+  std::string dledgerConfigPath("");
+
   namespace po = boost::program_options;
   po::options_description optsDesc("Options");
   optsDesc.add_options()
@@ -89,7 +97,11 @@ main(int argc, char* argv[])
   ("config-file,c", po::value<std::string>(&configFilePath)->default_value(configFilePath), "path to configuration file")
   ("repo-output,r", po::bool_switch(&wantRepoOut), "when enabled, all issued certificates will be published to repo-ng")
   ("repo-host,H", po::value<std::string>(&repoHost)->default_value(repoHost), "repo-ng host")
-  ("repo-port,P", po::value<std::string>(&repoPort)->default_value(repoPort), "repo-ng port");
+  ("repo-port,P", po::value<std::string>(&repoPort)->default_value(repoPort), "repo-ng port")
+//#ifdef NDNCERT_DLEDGER
+  ("dledger,d", po::value<std::string>(&dledgerConfigPath)->default_value(dledgerConfigPath), "DLedger config file if enabled")
+//#endif
+  ;
 
   po::variables_map vm;
   try {
@@ -116,16 +128,18 @@ main(int argc, char* argv[])
   std::map<Name, Data> cachedCertificates;
   auto profileData = ca.getCaProfileData();
 
+  std::list<function<void(const CaState&)>> updateCallbacks;
+
   if (wantRepoOut) {
     writeDataToRepo(profileData);
-    ca.setStatusUpdateCallback([&](const CaState& request) {
+    updateCallbacks.emplace_back([&](const CaState& request) {
       if (request.m_status == Status::SUCCESS && request.m_requestType == RequestType::NEW) {
         writeDataToRepo(request.m_cert);
       }
     });
   }
   else {
-    ca.setStatusUpdateCallback([&](const CaState& request) {
+    updateCallbacks.emplace_back([&](const CaState& request) {
       if (request.m_status == Status::SUCCESS && request.m_requestType == RequestType::NEW) {
         cachedCertificates[request.m_cert.getName()] = request.m_cert;
       }
@@ -144,12 +158,32 @@ main(int argc, char* argv[])
         });
   }
 
+  if (!dledgerConfigPath.empty()) {
+      auto dledger = DledgerUtil::getDledgerByConfig(dledgerConfigPath, keyChain, face);
+
+      updateCallbacks.emplace_back([dledger] (const CaState& request) {
+          if (request.m_status == Status::SUCCESS) {
+              DledgerUtil::addRequestToLedger(dledger, request);
+          }
+      });
+
+      dledger->setOnRecordAppCheck(DledgerUtil::checkNdncertRecord);
+  }
+
+  if (!updateCallbacks.empty()) {
+      ca.setStatusUpdateCallback([&](const CaState &request) {
+          for (const auto &c : updateCallbacks) {
+              c(request);
+          }
+      });
+  }
+
   face.processEvents();
   return 0;
 }
 
-}  // namespace ndncert
-}  // namespace ndn
+} // namespace ndncert
+} // namespace ndn
 
 int
 main(int argc, char* argv[])
