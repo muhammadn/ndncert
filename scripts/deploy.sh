@@ -95,7 +95,7 @@ IDENTITY=$(echo $CA_PREFIX | sed -e 's/^\///')
 #CA_CONFIG_PATH=/usr/local/etc/ndncert/ca.$(echo ${IDENTITY}).conf
 CA_CONFIG_PATH=/usr/local/etc/ndncert/ca.conf
 
-sed -i '' '/"ca-prefix":/ s/"ca-prefix":[^,]*/"ca-prefix":'"\"$IDENTITY\""'/' $CA_CONFIG_PATH
+sed '/"ca-prefix":/ s/"ca-prefix":[^,]*/"ca-prefix":'"\"$IDENTITY\""'/' $CA_CONFIG_PATH
 
 echo "Do you want to install ndncert CA for systemd on this machine?"
 echo ""
@@ -117,24 +117,24 @@ case $SYSTEMD_INSTALL in
 esac
 
 # TODO (need client?)
-#echo "Do you want to configure NDNCert Client?"
-#echo ""
-#read $NDNCERT_CLIENT_INSTALL
-#
-#case $NDNCERT_CLIENT_INSTALL in
-#             N|n)
-#                   echo "We will not install systemd on this machine"
-#             ;;
-#             Y|y)
-#                   echo "Copying NDNCERT-CA systemd service on this machine"
-#                   sudo cp ../systemd/ndncert-ca.service /etc/systemd/system
-#                   sudo chmod 644 /etc/systemd/system/ndncert.service
-#             ;;
-#             *)
-#                   echo "Unknown option, deployment cancelled"
-#                   exit
-#             ;;
-#esac
+echo "Do you want to configure NDNCert Client?"
+echo ""
+read $NDNCERT_CLIENT_INSTALL
+
+case $NDNCERT_CLIENT_INSTALL in
+             N|n)
+                   echo "We will not install systemd on this machine"
+             ;;
+             Y|y)
+                   echo "Copying NDNCERT-CA systemd service on this machine"
+                   sudo cp ../systemd/ndncert-ca.service /etc/systemd/system
+                   sudo chmod 644 /etc/systemd/system/ndncert.service
+             ;;
+             *)
+                   echo "Unknown option, deployment cancelled"
+                   exit
+             ;;
+esac
 
 echo "==================================================================="
 echo "=="
